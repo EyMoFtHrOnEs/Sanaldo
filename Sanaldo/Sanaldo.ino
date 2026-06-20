@@ -83,7 +83,14 @@ void debug(int throttle, int turn, int left, int right) {
   static int pl = INT_MIN, pr = INT_MIN;
   if (left == pl && right == pr) return;
   pl = left; pr = right;
-  Serial.printf("R2=%-3d L2=%-3d dpad[%d%d%d%d] | thr=%-4d turn=%-4d -> L=%-4d R=%-4d\n",
-                ps5.r2, ps5.l2, ps5.up, ps5.down, ps5.left, ps5.right,
-                throttle, turn, left, right);
+
+  char dpad[12] = "-";          // e.g. "up", "down right"
+  if (ps5.up || ps5.down || ps5.left || ps5.right)
+    snprintf(dpad, sizeof(dpad), "%s%s%s",
+             ps5.up ? "up" : ps5.down ? "down" : "",
+             (ps5.up || ps5.down) && (ps5.left || ps5.right) ? " " : "",
+             ps5.left ? "left" : ps5.right ? "right" : "");
+
+  Serial.printf("R2=%-3d L2=%-3d dpad=%-10s | thr=%-4d turn=%-4d -> L=%-4d R=%-4d\n",
+                ps5.r2, ps5.l2, dpad, throttle, turn, left, right);
 }
