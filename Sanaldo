@@ -1,0 +1,129 @@
+// ps5_2wd_car.ino
+//
+// 2WD car controlled by a PS5 DualSense controller over Bluetooth Classic.
+// Board:   Deneyap Kart 1A   (plain ESP32-WROVER-E, NOT v2/S3)
+// Driver:  L298N (or any IN1-4 + ENA/ENB style 2-motor driver)
+// Library: esp-ps5  -> https://github.com/HamzaYslmn/esp-ps5
+//
+// CONTROL SCHEME: single-stick "arcade" drive.
+//   Left stick UP/DOWN    -> forward / backward speed
+//   Left stick LEFT/RIGHT -> turn (mixed into both wheels)
+//   This is the classic RC-car style: push to go, push sideways to turn
+//   while still moving, full left/right with stick centered = spin in place.
+//
+// WIRING (Deneyap Kart 1A -> L298N):
+//   D0  -> ENA   (left motor PWM speed)
+//   D1  -> IN1   (left motor direction)
+//   D2  -> IN2   (left motor direction)
+//   D3  -> ENB   (right motor PWM speed)
+//   D12 -> IN3   (right motor direction)
+//   D14 -> IN4   (right motor direction)
+//   GND -> GND   (MUST share ground with the Deneyap board)
+//
+//   L298N's own 12V / motor power input comes from your separate battery
+//   pack -- do NOT connect that to the Deneyap board's 5V or 3V3 pins.
+//   Only GND is shared between the two.
+//
+// BEFORE FLASHING:
+//   Tools -> Board            -> ESP32 Dev Module (or "Deneyap Kart 1A" if
+//                                 you've installed the Deneyap board package
+
+//   Tools -> Partition Scheme -> Huge APP (3MB No OTA/1MB SPIFFS)  <-- REQUIRED
+//
+// SAFETY:
+//   If the controller disconnects (out of range, battery dies, etc.) the
+//   car STOPS automatically -- isConnected() goes false and we cut motors
+//   before returning from loop(). Always test with wheels off the ground
+//   first.
+
+#include <ps5Controller.h>
+
+// ---- Motor pins ----
+const int PIN_ENA = 0;   // left speed (PWM)
+const int PIN_IN1 = 1;   // left dir
+const int PIN_IN2 = 2;   // left dir
+const int PIN_ENB = 3;   // right speed (PWM)
+const int PIN_IN3 = 12;  // right dir
+const int PIN_IN4 = 14;  // right dir
+
+// ---- Tuning ----
+const int STICK_DEADZONE = 16;     // ignore tiny stick drift near center (0-127 scale)
+const int PWM_FREQ       = 20000;  // 20kHz - above audible range, quiet motors
+const int PWM_RES_BITS   = 8;      // 0-255 duty resolution
+const int PWM_CH_LEFT    = 0;
+const int PWM_CH_RIGHT   = 1;
+
+void setup() {
+  Serial.begin(115200);
+  delay(300);
+  Serial.println(F("[BOOT] PS5 2WD car - Deneyap Kart 1A + L298N"));
+
+  pinMode(PIN_IN1, OUTPUT);
+  pinMode(PIN_IN2, OUTPUT);
+  pinMode(PIN_IN3, OUTPUT);
+  pinMode(PIN_IN4, OUTPUT);
+
+  // LEDC = ESP32's hardware PWM peripheral, used for ENA/ENB speed control
+  ledcSetup(PWM_CH_LEFT,  PWM_FREQ, PWM_RES_BITS);
+  ledcSetup(PWM_CH_RIGHT, PWM_FREQ, PWM_RES_BITS);
+  ledcAttachPin(PIN_ENA, PWM_CH_LEFT);
+  ledcAttachPin(PIN_ENB, PWM_CH_RIGHT);
+
+  stopMotors();
+
+  Serial.println(F("[BOOT] Hold PS + Create on the controller to make it discoverable."));
+  ps5.begin(20); // scan up to 20s, connect to first DualSense found
+}
+
+void loop() {
+  if (!ps5.isConnected()) {
+    stopMotors();   // safety: no controller -> no movement
+    delay(100);
+    return;
+  }
+
+  // Left stick: x = turn, y = throttle. Y is inverted by the library (up = negative).
+  int throttle = applyDeadzone(-ps5.ly, STICK_DEADZONE); // flip so up = positive = forward
+  int turn     = applyDeadzone( ps5.lx, STICK_DEADZONE);
+
+  // Mix throttle + turn into independent left/right wheel speeds (-127..127)
+  int leftSpeed  = constrain(throttle + turn, -127, 127);
+  int rightSpeed = constrain(throttle - turn, -127, 127);
+
+  driveMotor(leftSpeed,  PIN_IN1, PIN_IN2, PWM_CH_LEFT);
+  driveMotor(rightSpeed, PIN_IN3, PIN_IN4, PWM_CH_RIGHT);
+
+  delay(20); // simple loop pacing; also keeps us under the library's send-rate guidance
+}
+
+// Scales a -127..127 stick axis so small noise near center reads as 0.
+int applyDeadzone(int v, int dz) {
+  if (abs(v) <= dz) return 0;
+  int sign = (v > 0) ? 1 : -1;
+  return sign * map(abs(v), dz, 127, 0, 127);
+}
+
+// Drives one motor: sets direction pins + PWM duty from a signed -127..127 speed.
+void driveMotor(int speed, int pinA, int pinB, int pwmChannel) {
+  if (speed > 0) {
+    digitalWrite(pinA, HIGH);
+    digitalWrite(pinB, LOW);
+  } else if (speed < 0) {
+    digitalWrite(pinA, LOW);
+    digitalWrite(pinB, HIGH);
+  } else {
+    digitalWrite(pinA, LOW);
+    digitalWrite(pinB, LOW);
+  }
+  int duty = map(abs(speed), 0, 127, 0, 255);
+  ledcWrite(pwmChannel, duty);
+}
+
+void stopMotors() {
+  digitalWrite(PIN_IN1, LOW);
+  digitalWrite(PIN_IN2, LOW);
+  digitalWrite(PIN_IN3, LOW);
+  digitalWrite(PIN_IN4, LOW);
+  ledcWrite(PWM_CH_LEFT, 0);
+  ledcWrite(PWM_CH_RIGHT, 0);
+}
