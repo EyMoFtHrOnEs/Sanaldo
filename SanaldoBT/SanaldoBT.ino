@@ -56,7 +56,7 @@ void handle(char c) {
     case 'q': speedPct = 100; break;    // full speed
     default:
       if (c >= '0' && c <= '9') speedPct = (c - '0') * 100 / 9;
-      else return;                      // ignore lights/sensors (M,N,T,D,...)
+      else { Serial.printf("unknown cmd='%c' (0x%02X)\n", c, (uint8_t)c); return; }
   }
   Serial.printf("cmd=%c  speed=%d%%\n", c, speedPct);
 }
