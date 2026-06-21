@@ -20,28 +20,58 @@
 
 #include <ps5Controller.h>
 
-struct Motor { uint8_t pwm, in1, in2, ch; };
+struct Motor { uint8_t pwm, in1, in2, ch, trim; };
 Motor motors[2] = {
-  { 23, 22, 21, 0 },   // LEFT : ENA, IN1, IN2
-  { 19, 18, 13, 1 },   // RIGHT: ENB, IN3, IN4
+  { 23, 22, 21, 0, 100 },   // LEFT : ENA, IN1, IN2  (trim %: drop the faster side to roll straight)
+  { 19, 18, 13, 1, 100 },   // RIGHT: ENB, IN3, IN4
 };
 
 const int DEADZONE = 16;            // ignore stick drift near center (0..127)
 const int PWM_FREQ = 20000;         // 20 kHz, above audible range
 const int PWM_RES  = 8;             // 0..255 duty
 
-// signed -127..127 -> direction pins + PWM duty
+// --- low level: one motor, signed -127..127 -> direction pins + PWM duty (scaled by per-side trim)
 void drive(const Motor& m, int speed) {
   digitalWrite(m.in1, speed > 0);
   digitalWrite(m.in2, speed < 0);
-  ledcWrite(m.ch, map(abs(speed), 0, 127, 0, 255));
+  ledcWrite(m.ch, map(abs(speed), 0, 127, 0, 255) * m.trim / 100);
 }
 
-void stop() { for (auto& m : motors) drive(m, 0); }
+// --- low level: set both wheels at once (and print what they're doing)
+void setWheels(int left, int right) {
+  drive(motors[0], left);
+  drive(motors[1], right);
+  debug(left, right);
+}
+
+void stop() { setWheels(0, 0); }
+
+// Spin in place: wheels run opposite ways. Used when steering with no throttle.
+void tankTurn(int turn) { setWheels(turn, -turn); }
+
+// Drive while steering: keep the outer wheel at full throttle, ease the INNER
+// wheel down toward 0 as the turn sharpens (it slows, it never reverses).
+void arcadeDrive(int throttle, int turn) {
+  int inner = throttle * (127 - abs(turn)) / 127;   // 0..throttle
+  if (turn > 0) setWheels(throttle, inner);         // turning right -> slow right wheel
+  else          setWheels(inner, throttle);         // turning left  -> slow left  (turn==0 -> straight)
+}
 
 int deadzone(int v) {
   if (abs(v) <= DEADZONE) return 0;
   return (v < 0 ? -1 : 1) * map(abs(v), DEADZONE, 127, 0, 127);
+}
+
+// --- read the controller into a throttle/turn pair (-127..127 each)
+int readThrottle() {
+  int t = (ps5.r2 - ps5.l2) / 2;                    // R2 forward / L2 back (analog)
+  if (t == 0) t = 127 * (ps5.up - ps5.down);        // D-pad fills in when triggers idle
+  return t;
+}
+int readTurn() {
+  int t = deadzone(ps5.lx);                          // left stick X
+  if (t == 0) t = 127 * (ps5.right - ps5.left);      // D-pad fills in when stick idle
+  return t;
 }
 
 void setup() {
@@ -60,33 +90,26 @@ void setup() {
 void loop() {
   if (!ps5.isConnected()) { stop(); delay(100); return; }  // safety: no pad -> no move
 
-  // Throttle: R2 forward / L2 back (analog). D-pad up/down fills in when idle.
-  int throttle = (ps5.r2 - ps5.l2) / 2;                     // 0..255 each -> -127..127
-  if (throttle == 0) throttle = 127 * (ps5.up - ps5.down);
+  int throttle = readThrottle();
+  int turn     = readTurn();
 
-  // Steer: left stick X. D-pad left/right fills in when idle.
-  int turn = deadzone(ps5.lx);
-  if (turn == 0) turn = 127 * (ps5.right - ps5.left);
+  if (throttle == 0 && turn != 0) tankTurn(turn);          // stopped -> spin in place
+  else                            arcadeDrive(throttle, turn);  // moving -> slow the inner wheel
 
-  int left  = constrain(throttle + turn, -127, 127);
-  int right = constrain(throttle - turn, -127, 127);
-  drive(motors[0], left);
-  drive(motors[1], right);
-
-  debug(throttle, turn, left, right);
   delay(20);
 }
 
-// Plain-language status, printed only when it changes.
+// Plain-language status, printed only when the wheels change.
 // Lets you verify the drive logic with no L298N connected.
-void debug(int throttle, int turn, int left, int right) {
+void debug(int left, int right) {
   static int pl = INT_MIN, pr = INT_MIN;
   if (left == pl && right == pr) return;
   pl = left; pr = right;
 
-  const char* move = throttle > 0 ? "FWD " : throttle < 0 ? "BACK" : "STOP";
-  const char* dir  = turn > 0 ? ">>" : turn < 0 ? "<<" : "--";
-  int spd = max(abs(left), abs(right)) * 100 / 127;     // 0..100 %
+  const char* move = (left > 0 && right > 0) ? "FWD " :
+                     (left < 0 && right < 0) ? "BACK" :
+                     (left || right)         ? "TURN" : "STOP";
+  int spd = max(abs(left), abs(right)) * 100 / 127;        // 0..100 %
 
-  Serial.printf("%s  steer %s  %3d%%   (L%-4d R%-4d)\n", move, dir, spd, left, right);
+  Serial.printf("%s  %3d%%   (L%-4d R%-4d)\n", move, spd, left, right);
 }
