@@ -1,23 +1,20 @@
-// ps5_2wd_car.ino — 2WD car driven by a PS5 DualSense over Bluetooth Classic.
+// Sanaldo.ino — 2WD car driven by a PS5 DualSense over Bluetooth Classic.
 //
-// Board:   Deneyap Kart 1A  (plain ESP32-WROVER-E)
+// Board:   Deneyap Kart 1A (ESP32-WROVER-E) — Arduino core 2.0.x (ledcSetup API)
 // Driver:  L298N  (IN1-4 + ENA/ENB)
-// Library: esp-ps5  -> https://github.com/HamzaYslmn/esp-ps5
+// Library: esp-ps5 >= 1.3.3  -> https://github.com/HamzaYslmn/esp-ps5
 //
-// Two control schemes, pick with `mode` below:
-//   ANALOG : R2 = forward, L2 = back; steer with the left OR right stick (10% deadzone).
-//   DIGITAL: drive with the D-pad (up/down + left/right combine, e.g. up+right = fwd-right).
-// Gears (both modes): Triangle = up, Cross(X) = down. 3 gears cap top speed: 100 / 150 / 255.
+// Drive with EITHER scheme, both live at once:
+//   analog  : R2 = forward, L2 = back; steer with the left or right stick.
+//   digital : D-pad up/down + left/right (combine, e.g. up+right = forward-right).
+// Steering eases the inner wheel; with no throttle, left/right spin in place.
+// Gears: Triangle = up, Cross(X) = down. 3 gears cap top speed: 100 / 150 / 255.
+// Lightbar smoothly cycles through the rainbow while connected.
 //
-// WIRING (Deneyap 1A silk label -> L298N).  Pins below are written as raw
-// GPIO numbers so the sketch compiles under either "ESP32 Dev Module" or
-// the Deneyap board package. Share GND with the L298N; motor power comes
-// from a SEPARATE battery, never from the board's 5V/3V3.
-//   D0 (GPIO23) -> ENA    D1 (GPIO22) -> IN1    D4 (GPIO21) -> IN2   (LEFT)
-//   D5 (GPIO19) -> ENB    D6 (GPIO18) -> IN3    D12(GPIO13) -> IN4   (RIGHT)
-//
-// All six are "safe" outputs: no strapping pins (0,2,5,12,15), no UART0
-// (1,3), no WROVER PSRAM pins (16,17).
+// WIRING (Deneyap 1A silk -> L298N). Share GND with the L298N; motor power from
+// a SEPARATE battery, never the board's 5V/3V3.
+//   D0 (GPIO23) -> ENA   D1 (GPIO22) -> IN1   D4 (GPIO21) -> IN2   (LEFT)
+//   D5 (GPIO19) -> ENB   D6 (GPIO18) -> IN3   D12(GPIO13) -> IN4   (RIGHT)
 //
 // Tools -> Partition Scheme -> Huge APP (3MB No OTA)   <-- REQUIRED for BT stack.
 
@@ -29,85 +26,83 @@ Motor motors[2] = {
   { 19, 18, 13, 1, 100 },   // RIGHT: ENB, IN3, IN4
 };
 
-enum Mode { MODE_ANALOG, MODE_DIGITAL };   // ANALOG/DIGITAL are core macros, don't reuse
-Mode mode = MODE_DIGITAL;           // <-- pick your control scheme
-
 const int GEARS[3] = { 100, 150, 255 };   // max PWM duty per gear (255 = full)
-int gear = 0;                       // 0..2; Triangle = up, Cross = down
+int gear           = 0;                   // 0..2; Triangle = up, Cross = down
+const int PWM_FREQ = 20000;               // 20 kHz, above audible range
+const int PWM_RES  = 8;                   // 0..255 duty
+const int DEADZONE = 127 * 10 / 100;      // 10% stick deadzone
 
-const int DEADZONE = 127 * 10 / 100;  // 10% stick deadzone
-const int PWM_FREQ = 20000;         // 20 kHz, above audible range
-const int PWM_RES  = 8;             // 0..255 duty
+// ---- motors -----------------------------------------------------------------
 
-// one motor: signed -127..127 -> direction pins + PWM duty, capped by the current gear (x trim)
+// one motor: signed -127..127 -> direction pins + PWM duty, capped by gear (x trim)
 void drive(const Motor& m, int speed) {
   digitalWrite(m.in1, speed > 0);
   digitalWrite(m.in2, speed < 0);
   ledcWrite(m.ch, map(abs(speed), 0, 127, 0, GEARS[gear]) * m.trim / 100);
 }
 
-// both wheels at once (and print them)
 void setWheels(int left, int right) {
   drive(motors[0], left);
   drive(motors[1], right);
-  debug(left, right);
 }
 
 void stop() { setWheels(0, 0); }
 
-// spin in place: wheels run opposite ways (steering with no throttle)
-void tankTurn(int turn) { setWheels(turn, -turn); }
-
-// steering eases the inner wheel toward 0 (it slows, never reverses)
-void arcadeDrive(int throttle, int turn) {
+// throttle/turn (-127..127) -> wheels. No throttle + steering = spin in place;
+// otherwise ease the inner wheel toward 0 (it slows, never reverses).
+void mix(int throttle, int turn, int& left, int& right) {
+  if (throttle == 0 && turn != 0) { left = turn; right = -turn; return; }
   int inner = throttle * (127 - abs(turn)) / 127;
-  if (turn > 0) setWheels(throttle, inner);   // turn right -> slow right
-  else          setWheels(inner, throttle);   // turn left  -> slow left (turn 0 -> straight)
+  if (turn > 0) { left = throttle; right = inner; }   // turn right -> slow right
+  else          { left = inner; right = throttle; }   // turn left / straight
 }
 
-// full fwd/back jog. If wheels move here but not while driving -> the PS5 link, not wiring.
-void selftest() {
-  int g = gear; gear = 2;            // test at top gear regardless of current
-  Serial.println(F("[TEST] fwd / back / stop"));
-  setWheels(127, 127); delay(500);
-  setWheels(-127, -127); delay(500);
-  stop();
-  gear = g;
-}
+// ---- input ------------------------------------------------------------------
 
-// run selftest when "selftest" arrives over serial
-void checkSerial() {
-  if (!Serial.available()) return;
-  String cmd = Serial.readStringUntil('\n');
-  cmd.trim();
-  if (cmd == "selftest" || cmd == "/selftest") selftest();
-}
-
+// stick value -> -127..127 with a 10% center deadzone
 int deadzone(int v) {
   if (abs(v) <= DEADZONE) return 0;
   int s = (v < 0 ? -1 : 1) * map(abs(v), DEADZONE, 127, 0, 127);
-  return constrain(s, -127, 127);   // -128 stick reading would otherwise overshoot
+  return constrain(s, -127, 127);         // an int8 stick can read -128
 }
 
-// read throttle+turn (-127..127 each) for the active mode
+// throttle/turn (-127..127). Analog (triggers/sticks) wins; D-pad fills in when idle.
 void readInputs(int& throttle, int& turn) {
-  if (mode == MODE_ANALOG) {
-    throttle = (ps5.r2 - ps5.l2) / 2;                // R2 forward / L2 back
-    turn = deadzone(ps5.lx);                         // left stick...
-    if (turn == 0) turn = deadzone(ps5.rx);          // ...or right stick
-  } else {                                           // DIGITAL: D-pad only
-    throttle = 127 * (ps5.up - ps5.down);
-    turn     = 127 * (ps5.right - ps5.left);
-  }
+  throttle = (ps5.r2 - ps5.l2) / 2;                                   // R2 fwd / L2 back
+  if (throttle == 0) throttle = 127 * ((ps5.up ? 1 : 0) - (ps5.down ? 1 : 0));
+
+  turn = deadzone(ps5.lx);                                            // left stick...
+  if (turn == 0) turn = deadzone(ps5.rx);                             // ...or right stick...
+  if (turn == 0) turn = 127 * ((ps5.right ? 1 : 0) - (ps5.left ? 1 : 0));  // ...or D-pad
 }
 
-// Triangle = up a gear, Cross = down (edge-triggered, both modes)
-void shiftGears() {
-  if (ps5.triangle.pressed && gear < 2) gear++;
-  if (ps5.cross.pressed    && gear > 0) gear--;
-  if (ps5.triangle.pressed || ps5.cross.pressed)
-    Serial.printf("gear %d (max %d)\n", gear + 1, GEARS[gear]);
+// Triangle = up, Cross = down. Ignore when both/neither edge fired.
+void shiftGears(bool up, bool down) {
+  if (up == down) return;
+  if (up   && gear < 2) gear++;
+  if (down && gear > 0) gear--;
+  Serial.printf("[GEAR] %d (max %d)\n", gear + 1, GEARS[gear]);
 }
+
+// ---- lightbar ---------------------------------------------------------------
+
+// hue 0..255 -> RGB rainbow (Adafruit-style color wheel)
+void wheel(uint8_t pos, uint8_t& r, uint8_t& g, uint8_t& b) {
+  pos = 255 - pos;
+  if (pos < 85)       { r = 255 - pos * 3; g = 0;            b = pos * 3; }
+  else if (pos < 170) { pos -= 85;  r = 0;            g = pos * 3;       b = 255 - pos * 3; }
+  else                { pos -= 170; r = pos * 3;      g = 255 - pos * 3; b = 0; }
+}
+
+// smooth color transition; one step per call. Also keeps the controller streaming.
+void colorCycle() {
+  static uint8_t hue = 0;
+  uint8_t r, g, b;
+  wheel(hue++, r, g, b);
+  ps5.lightbar(r, g, b).send();
+}
+
+// ---- main -------------------------------------------------------------------
 
 void setup() {
   Serial.begin(115200);
@@ -118,38 +113,22 @@ void setup() {
     ledcAttachPin(m.pwm, m.ch);
   }
   stop();
-  Serial.printf("[BOOT] mode=%s  Type 'selftest' to jog motors. Hold PS + Create to pair.\n",
-                mode == MODE_ANALOG ? "ANALOG" : "DIGITAL");
-  ps5.begin(20);                    // scan up to 20s for first controller
+  Serial.println(F("[BOOT] D-pad drives, Triangle/Cross shift gears. Hold PS + Create to pair."));
+  ps5.begin(20);
 }
 
 void loop() {
-  checkSerial();                                           // "selftest" works even with no pad
-  if (!ps5.isConnected()) { stop(); delay(100); return; }  // safety: no pad -> no move
+  if (!ps5.isConnected()) { stop(); delay(100); return; }   // no pad -> no move
 
-  shiftGears();
-  int throttle, turn;
+  shiftGears(ps5.triangle.pressed, ps5.cross.pressed);
+
+  int throttle, turn, left, right;
   readInputs(throttle, turn);
+  mix(throttle, turn, left, right);
+  setWheels(left, right);
 
-  if (throttle == 0 && turn != 0) tankTurn(turn);          // stopped -> spin in place
-  else                            arcadeDrive(throttle, turn);  // moving -> slow the inner wheel
+  static uint32_t t = 0;                                    // ~25 fps color transition
+  if (millis() - t >= 40) { t = millis(); colorCycle(); }
 
   delay(20);
-}
-
-// status print, only when the wheels change. Shows the inputs for the active mode:
-//   DIGITAL -> gear + D-pad fwd/back/turn   |   ANALOG -> gear + R2/L2 + sticks
-void debug(int left, int right) {
-  static int pl = INT_MIN, pr = INT_MIN;
-  if (left == pl && right == pr) return;
-  pl = left; pr = right;
-
-  if (mode == MODE_DIGITAL) {
-    const char* fb = ps5.up ? "FWD " : ps5.down ? "BACK" : "----";
-    const char* lr = ps5.left ? "LEFT " : ps5.right ? "RIGHT" : "     ";
-    Serial.printf("DIG  gear %d  %s %s   (L%-4d R%-4d)\n", gear + 1, fb, lr, left, right);
-  } else {
-    Serial.printf("ANA  gear %d  R2=%-3d L2=%-3d  lx=%-4d rx=%-4d   (L%-4d R%-4d)\n",
-                  gear + 1, ps5.r2, ps5.l2, ps5.lx, ps5.rx, left, right);
-  }
 }
