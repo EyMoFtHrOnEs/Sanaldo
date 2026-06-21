@@ -29,34 +29,42 @@ Motor motors[2] = {
 const int PWM_FREQ = 20000, PWM_RES = 8;
 int speedPct = 100;                 // 0..100, set by the app's speed slider
 
-// --- low level: one motor, signed -127..127 -> direction pins + PWM duty (scaled by speedPct and per-side trim)
+// one motor: signed -127..127 -> direction pins + PWM duty (x speedPct x per-side trim)
 void drive(const Motor& m, int speed) {
   digitalWrite(m.in1, speed > 0);
   digitalWrite(m.in2, speed < 0);
   ledcWrite(m.ch, map(abs(speed) * speedPct / 100, 0, 127, 0, 255) * m.trim / 100);
 }
 
-// --- low level: set both wheels at once
+// both wheels at once
 void setWheels(int left, int right) {
   drive(motors[0], left);
   drive(motors[1], right);
 }
 
-// Spin in place: wheels run opposite ways. Used when steering with no throttle.
+// spin in place: wheels run opposite ways (steering with no throttle)
 void tankTurn(int turn) { setWheels(turn, -turn); }
 
-// Drive while steering: outer wheel stays at full throttle, INNER wheel eases
-// down toward 0 as the turn sharpens (it slows, it never reverses).
+// steering eases the inner wheel toward 0 (it slows, never reverses)
 void arcadeDrive(int throttle, int turn) {
-  int inner = throttle * (127 - abs(turn)) / 127;   // 0..throttle
-  if (turn > 0) setWheels(throttle, inner);         // turning right -> slow right wheel
-  else          setWheels(inner, throttle);         // turning left  -> slow left  (turn==0 -> straight)
+  int inner = throttle * (127 - abs(turn)) / 127;
+  if (turn > 0) setWheels(throttle, inner);   // turn right -> slow right
+  else          setWheels(inner, throttle);   // turn left  -> slow left (turn 0 -> straight)
 }
 
-// Pick spin-in-place vs. drive-and-steer based on throttle.
+// stopped + steering -> tank turn, else drive-and-steer
 void move(int throttle, int turn) {
-  if (throttle == 0 && turn != 0) tankTurn(turn);   // stopped -> tank turn
+  if (throttle == 0 && turn != 0) tankTurn(turn);
   else                            arcadeDrive(throttle, turn);
+}
+
+// full fwd/back jog. If wheels move here but not from the app -> the phone link, not wiring.
+void selftest() {
+  Serial.println(F("[TEST] fwd / back / stop"));
+  speedPct = 100;                   // ignore the app's slider — test at full power
+  setWheels(127, 127); delay(500);
+  setWheels(-127, -127); delay(500);
+  setWheels(0, 0);
 }
 
 void handle(char c) {
@@ -71,11 +79,22 @@ void handle(char c) {
     case 'C': move(-127,   64); break;  // back-right
     case 'S': move(   0,    0); break;  // stop
     case 'q': speedPct = 100; break;    // full speed
-    default:
-      if (c >= '0' && c <= '9') speedPct = (c - '0') * 100 / 9;
-      else { Serial.printf("unknown cmd='%c' (0x%02X)\n", c, (uint8_t)c); return; }
+    default:  speedPct = (c - '0') * 100 / 9; break;  // '0'..'9' slider (pre-filtered in pump)
   }
   Serial.printf("cmd=%c  speed=%d%%\n", c, speedPct);
+}
+
+// one worker for USB + phone serial: known letters drive, the word "selftest" runs the test
+void pump(Stream& in) {
+  static String buf;   // ponytail: shared by both streams, fine for one user at a time
+  while (in.available()) {
+    char c = in.read();
+    if (c == '\n' || c == '\r') { buf = ""; continue; }
+    if (strchr("FGLRQEZCSq0123456789", c)) handle(c);   // drive command
+    buf += c;
+    if (buf.endsWith("selftest")) { selftest(); buf = ""; }
+    else if (buf.length() > 16)     buf = "";           // cap the buffer
+  }
 }
 
 void setup() {
@@ -88,10 +107,11 @@ void setup() {
   }
   move(0, 0);
   SerialBT.begin("SanaldoBT");
-  Serial.println(F("[BOOT] Pair to 'SanaldoBT' in the app."));
+  Serial.println(F("[BOOT] Type 'selftest' to jog the motors. Pair to 'SanaldoBT' in the app."));
 }
 
 void loop() {
-  if (SerialBT.available()) handle(SerialBT.read());
+  pump(Serial);                            // USB monitor: "selftest", or drive by hand
+  pump(SerialBT);                          // phone app: drive commands + "selftest"
   if (!SerialBT.hasClient()) move(0, 0);   // safety: no phone -> no move
 }
