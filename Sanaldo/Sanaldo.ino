@@ -4,7 +4,10 @@
 // Driver:  L298N  (IN1-4 + ENA/ENB)
 // Library: esp-ps5  -> https://github.com/HamzaYslmn/esp-ps5
 //
-// Drive: R2/L2 = throttle, left stick X = steer (D-pad works too).
+// Two control schemes, pick with `mode` below:
+//   ANALOG : R2 = forward, L2 = back; steer with the left OR right stick (10% deadzone).
+//   DIGITAL: drive with the D-pad (up/down + left/right combine, e.g. up+right = fwd-right).
+// Gears (both modes): Triangle = up, Cross(X) = down. 3 gears cap top speed: 100 / 150 / 255.
 //
 // WIRING (Deneyap 1A silk label -> L298N).  Pins below are written as raw
 // GPIO numbers so the sketch compiles under either "ESP32 Dev Module" or
@@ -26,15 +29,21 @@ Motor motors[2] = {
   { 19, 18, 13, 1, 100 },   // RIGHT: ENB, IN3, IN4
 };
 
-const int DEADZONE = 16;            // ignore stick drift near center (0..127)
+enum Mode { ANALOG, DIGITAL };
+Mode mode = DIGITAL;                // <-- pick your control scheme
+
+const int GEARS[3] = { 100, 150, 255 };   // max PWM duty per gear (255 = full)
+int gear = 0;                       // 0..2; Triangle = up, Cross = down
+
+const int DEADZONE = 127 * 10 / 100;  // 10% stick deadzone
 const int PWM_FREQ = 20000;         // 20 kHz, above audible range
 const int PWM_RES  = 8;             // 0..255 duty
 
-// one motor: signed -127..127 -> direction pins + PWM duty (x per-side trim)
+// one motor: signed -127..127 -> direction pins + PWM duty, capped by the current gear (x trim)
 void drive(const Motor& m, int speed) {
   digitalWrite(m.in1, speed > 0);
   digitalWrite(m.in2, speed < 0);
-  ledcWrite(m.ch, map(abs(speed), 0, 127, 0, 255) * m.trim / 100);
+  ledcWrite(m.ch, map(abs(speed), 0, 127, 0, GEARS[gear]) * m.trim / 100);
 }
 
 // both wheels at once (and print them)
@@ -58,10 +67,12 @@ void arcadeDrive(int throttle, int turn) {
 
 // full fwd/back jog. If wheels move here but not while driving -> the PS5 link, not wiring.
 void selftest() {
+  int g = gear; gear = 2;            // test at top gear regardless of current
   Serial.println(F("[TEST] fwd / back / stop"));
   setWheels(127, 127); delay(500);
   setWheels(-127, -127); delay(500);
   stop();
+  gear = g;
 }
 
 // run selftest when "selftest" arrives over serial
@@ -74,19 +85,28 @@ void checkSerial() {
 
 int deadzone(int v) {
   if (abs(v) <= DEADZONE) return 0;
-  return (v < 0 ? -1 : 1) * map(abs(v), DEADZONE, 127, 0, 127);
+  int s = (v < 0 ? -1 : 1) * map(abs(v), DEADZONE, 127, 0, 127);
+  return constrain(s, -127, 127);   // -128 stick reading would otherwise overshoot
 }
 
-// controller -> throttle/turn pair (-127..127 each)
-int readThrottle() {
-  int t = (ps5.r2 - ps5.l2) / 2;                    // R2 forward / L2 back (analog)
-  if (t == 0) t = 127 * (ps5.up - ps5.down);        // D-pad fills in when triggers idle
-  return t;
+// read throttle+turn (-127..127 each) for the active mode
+void readInputs(int& throttle, int& turn) {
+  if (mode == ANALOG) {
+    throttle = (ps5.r2 - ps5.l2) / 2;                // R2 forward / L2 back
+    turn = deadzone(ps5.lx);                         // left stick...
+    if (turn == 0) turn = deadzone(ps5.rx);          // ...or right stick
+  } else {                                           // DIGITAL: D-pad only
+    throttle = 127 * (ps5.up - ps5.down);
+    turn     = 127 * (ps5.right - ps5.left);
+  }
 }
-int readTurn() {
-  int t = deadzone(ps5.lx);                          // left stick X
-  if (t == 0) t = 127 * (ps5.right - ps5.left);      // D-pad fills in when stick idle
-  return t;
+
+// Triangle = up a gear, Cross = down (edge-triggered, both modes)
+void shiftGears() {
+  if (ps5.triangle.pressed && gear < 2) gear++;
+  if (ps5.cross.pressed    && gear > 0) gear--;
+  if (ps5.triangle.pressed || ps5.cross.pressed)
+    Serial.printf("gear %d (max %d)\n", gear + 1, GEARS[gear]);
 }
 
 void setup() {
@@ -98,7 +118,8 @@ void setup() {
     ledcAttachPin(m.pwm, m.ch);
   }
   stop();
-  Serial.println(F("[BOOT] Type 'selftest' to jog the motors. Hold PS + Create to pair."));
+  Serial.printf("[BOOT] mode=%s  Type 'selftest' to jog motors. Hold PS + Create to pair.\n",
+                mode == ANALOG ? "ANALOG" : "DIGITAL");
   ps5.begin(20);                    // scan up to 20s for first controller
 }
 
@@ -106,8 +127,9 @@ void loop() {
   checkSerial();                                           // "selftest" works even with no pad
   if (!ps5.isConnected()) { stop(); delay(100); return; }  // safety: no pad -> no move
 
-  int throttle = readThrottle();
-  int turn     = readTurn();
+  shiftGears();
+  int throttle, turn;
+  readInputs(throttle, turn);
 
   if (throttle == 0 && turn != 0) tankTurn(turn);          // stopped -> spin in place
   else                            arcadeDrive(throttle, turn);  // moving -> slow the inner wheel
