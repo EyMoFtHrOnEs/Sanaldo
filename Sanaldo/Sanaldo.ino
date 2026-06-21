@@ -137,16 +137,19 @@ void loop() {
   delay(20);
 }
 
-// status print, only when the wheels change (verify logic with no L298N attached)
+// status print, only when the wheels change. Shows the inputs for the active mode:
+//   DIGITAL -> gear + D-pad fwd/back/turn   |   ANALOG -> gear + R2/L2 + sticks
 void debug(int left, int right) {
   static int pl = INT_MIN, pr = INT_MIN;
   if (left == pl && right == pr) return;
   pl = left; pr = right;
 
-  const char* move = (left > 0 && right > 0) ? "FWD " :
-                     (left < 0 && right < 0) ? "BACK" :
-                     (left || right)         ? "TURN" : "STOP";
-  int spd = max(abs(left), abs(right)) * 100 / 127;        // 0..100 %
-
-  Serial.printf("%s  %3d%%   (L%-4d R%-4d)\n", move, spd, left, right);
+  if (mode == MODE_DIGITAL) {
+    const char* fb = ps5.up ? "FWD " : ps5.down ? "BACK" : "----";
+    const char* lr = ps5.left ? "LEFT " : ps5.right ? "RIGHT" : "     ";
+    Serial.printf("DIG  gear %d  %s %s   (L%-4d R%-4d)\n", gear + 1, fb, lr, left, right);
+  } else {
+    Serial.printf("ANA  gear %d  R2=%-3d L2=%-3d  lx=%-4d rx=%-4d   (L%-4d R%-4d)\n",
+                  gear + 1, ps5.r2, ps5.l2, ps5.lx, ps5.rx, left, right);
+  }
 }
