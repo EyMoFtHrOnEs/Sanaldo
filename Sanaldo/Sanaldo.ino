@@ -29,8 +29,8 @@ Motor motors[2] = {
   { 19, 18, 13, 1, 100 },   // RIGHT: ENB, IN3, IN4
 };
 
-enum Mode { ANALOG, DIGITAL };
-Mode mode = DIGITAL;                // <-- pick your control scheme
+enum Mode { MODE_ANALOG, MODE_DIGITAL };   // ANALOG/DIGITAL are core macros, don't reuse
+Mode mode = MODE_DIGITAL;           // <-- pick your control scheme
 
 const int GEARS[3] = { 100, 150, 255 };   // max PWM duty per gear (255 = full)
 int gear = 0;                       // 0..2; Triangle = up, Cross = down
@@ -91,7 +91,7 @@ int deadzone(int v) {
 
 // read throttle+turn (-127..127 each) for the active mode
 void readInputs(int& throttle, int& turn) {
-  if (mode == ANALOG) {
+  if (mode == MODE_ANALOG) {
     throttle = (ps5.r2 - ps5.l2) / 2;                // R2 forward / L2 back
     turn = deadzone(ps5.lx);                         // left stick...
     if (turn == 0) turn = deadzone(ps5.rx);          // ...or right stick
@@ -119,7 +119,7 @@ void setup() {
   }
   stop();
   Serial.printf("[BOOT] mode=%s  Type 'selftest' to jog motors. Hold PS + Create to pair.\n",
-                mode == ANALOG ? "ANALOG" : "DIGITAL");
+                mode == MODE_ANALOG ? "ANALOG" : "DIGITAL");
   ps5.begin(20);                    // scan up to 20s for first controller
 }
 
