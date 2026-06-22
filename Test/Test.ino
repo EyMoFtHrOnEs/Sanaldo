@@ -15,12 +15,20 @@
 //   b  ->  BLUETOOTH TESTİ : PS5 koluna bağlanır, kolun MAC adresini yazar.
 //          X (çarpı) tuşuna basılı tutulunca "X pressed" yazmaya devam eder,
 //          bırakınca durur, tekrar basınca yine yazar.
+//   p  ->  TELEFON BLUETOOTH TESTİ : telefondan SPP (Bluetooth Serial) ile bağlan.
+//          Telefonda "Serial Bluetooth Terminal" gibi bir uygulamayla "Sanaldo-Test"
+//          cihazına eşleş; gönderdiğin harf motorları sürer: f ileri / b geri /
+//          l sol / r sağ / s dur. Kart gelen harfi geri yazar (echo).
 //   r  ->  RGB TESTİ : kart üzeri RGB LED renk döngüsü (çalışıyor göstergesi).
+//
+// NOT: 'b' (PS5) ve 'p' (telefon) aynı BT yığınını kullanır; mod değiştirince
+//      en temiz sonuç için karttan RST ile reset at.
 //
 // Başka bir teste geçmek için ilgili harfi yaz. Reset = kart üzeri RST tuşu.
 // ============================================================================
 
 #include <ps5Controller.h>
+#include "BluetoothSerial.h"   // telefon kontrolü (SPP / Bluetooth Serial)
 
 // ---- motor pinleri (L298N) --------------------------------------------------
 // trim %: hızlı tarafı kısıp aracı düz gitmesi için (orijinal koddan).
@@ -36,8 +44,10 @@ const int TEST_PWM = 150;     // test hızı (motorlar ucu ucuna dönsün, tam g
 
 const uint8_t RGB_PARLAKLIK = 10;   // RGB LED parlaklığı (maksimum 255; 10 = kısık)
 
-char mod = 'r';       // aktif test modu: 'm' motor, 'b' bluetooth, 'r' rgb
-bool btBagli = false; // bluetooth testinde bağlantı bir kez kuruldu mu
+char mod = 'r';       // aktif test modu: 'm' motor, 'b' ps5, 'p' telefon, 'r' rgb
+bool btBagli = false; // ps5 testinde bağlantı bir kez kuruldu mu
+bool phoneBaslatildi = false;   // telefon SPP bir kez başlatıldı mı
+BluetoothSerial SerialBT;
 
 // ---- motor sürme ------------------------------------------------------------
 
@@ -110,6 +120,30 @@ void bluetoothtest() {
   delay(20);                                         // ps5 akisini ayakta tutar
 }
 
+// TELEFON BLUETOOTH TESTİ: telefon SPP ile bağlanır, gönderdiği harf motorları sürer.
+// f ileri / b geri / l sol / r sağ / s dur. Gelen harf telefona geri yazılır (echo).
+void phonetest() {
+  if (!phoneBaslatildi) {
+    SerialBT.begin("Sanaldo-Test");                // telefondan görünecek cihaz adı
+    Serial.println("[PHONE] SPP basladi. Telefondan 'Sanaldo-Test' ile eslesin.");
+    Serial.println("[PHONE] gonder: f ileri / b geri / l sol / r sag / s dur");
+    phoneBaslatildi = true;
+  }
+
+  if (!SerialBT.available()) { delay(20); return; }
+  char c = SerialBT.read();
+  Serial.printf("[PHONE] gelen: %c\n", c);
+  SerialBT.printf("ok: %c\n", c);                  // telefona geri bildirim
+
+  switch (c) {
+    case 'f': setWheels( TEST_PWM,  TEST_PWM); break;   // ileri
+    case 'b': setWheels(-TEST_PWM, -TEST_PWM); break;   // geri
+    case 'l': setWheels(-TEST_PWM,  TEST_PWM); break;   // sola dön
+    case 'r': setWheels( TEST_PWM, -TEST_PWM); break;   // sağa dön
+    default:  dur();                           break;   // s veya bilinmeyen -> dur
+  }
+}
+
 // RGB TESTİ: kart üzeri RGB LED'i renk döngüsünde çevirir (kod çalışıyor göstergesi).
 // Parlaklık RGB_PARLAKLIK ile kısık tutulur. neopixelWrite çekirdek fonksiyonudur.
 void rgbtest() {
@@ -130,6 +164,7 @@ void menu() {
   Serial.println("\n==== DONANIM TESTI ====");
   Serial.println("  m -> motor testi");
   Serial.println("  b -> bluetooth (PS5) testi");
+  Serial.println("  p -> telefon bluetooth testi");
   Serial.println("  r -> rgb led testi");
   Serial.printf ("  aktif mod: %c\n", mod);
 }
@@ -160,9 +195,9 @@ void setup() {
 void loop() {
   if (Serial.available()) {                         // menüden mod seç
     char c = Serial.read();
-    if (c == 'm' || c == 'b' || c == 'r') {
+    if (c == 'm' || c == 'b' || c == 'p' || c == 'r') {
       mod = c;
-      btBagli = false;                              // mod değişince BT'yi sıfırla
+      btBagli = false;                              // mod değişince durumları sıfırla
       dur();
       Serial.printf("\n>>> mod: %c\n", mod);
     }
@@ -171,6 +206,7 @@ void loop() {
   switch (mod) {
     case 'm': motortest();     break;
     case 'b': bluetoothtest(); break;
+    case 'p': phonetest();     break;
     default:  rgbtest();       break;               // 'r'
   }
 }

@@ -32,6 +32,9 @@ const int PWM_FREQ = 20000;               // 20 kHz, above audible range
 const int PWM_RES  = 8;                   // 0..255 duty
 const int DEADZONE = 127 * 10 / 100;      // 10% stick deadzone
 
+// ---- MAC ADDRESS -----------------------------------------------------------------
+const char* PS5_MAC = "";   // e.g. "AA:BB:CC:DD:EE:FF"
+
 // ---- motors -----------------------------------------------------------------
 
 // one motor: signed -127..127 -> direction pins + PWM duty, capped by gear (x trim)
@@ -114,7 +117,8 @@ void setup() {
   }
   stop();
   Serial.println(F("[BOOT] D-pad drives, Triangle/Cross shift gears. Hold PS + Create to pair."));
-  ps5.begin(20);
+  if (PS5_MAC[0]) ps5.begin(PS5_MAC);   // static MAC: fast-connect, no scan
+  else            ps5.begin(20);        // empty: scan + pair
 }
 
 void loop() {
