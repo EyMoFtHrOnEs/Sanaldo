@@ -5,11 +5,12 @@
 //          (a Classic SPP module) does the wireless; the S2 just talks UART to it.
 // Driver:  L298N (IN1-4 + ENA/ENB)
 //
-// HOW TO DRIVE: pair your phone with the HC-05 (default PIN 1234/0000), open any
-// "Bluetooth RC Controller" app (the common Arduino car app). Its buttons send
-// single letters this sketch understands:
-//   F back/fwd: F=forward B=back L=left R=right S=stop
-//   diagonals : G=fwd-left I=fwd-right H=back-left J=back-right
+// HOW TO DRIVE: pair your phone with the HC-05 (default PIN 1234/0000), open the
+// "Arduino Bluetooth RC Car" app. Its buttons send single letters (same map as
+// SanaldoBT). Default 3x3 D-pad layout:
+//   Q F E      forward-left / FORWARD / forward-right
+//   L S R      LEFT / stop / RIGHT
+//   Z G C      back-left  / BACK    / back-right
 //   speed     : digits 0..9 and q set top speed (0=stop ... 9,q=full)
 // No app? Any BT serial terminal works — just send the letters above.
 //
@@ -69,18 +70,18 @@ void mix(int throttle, int turn, int& left, int& right) {
 // ---- input ------------------------------------------------------------------
 
 // one command letter -> throttle/turn (-127..127). Returns false for unknown.
-bool command(char c, int& throttle, int& turn) {
+bool command(char c, int& throttle, int& turn) {       // same map as SanaldoBT
   throttle = 0; turn = 0;
   switch (c) {
-    case 'F': throttle =  127;            break;   // forward
-    case 'B': throttle = -127;            break;   // back
-    case 'L': turn     = -127;            break;   // spin left
-    case 'R': turn     =  127;            break;   // spin right
-    case 'G': throttle =  127; turn = -127; break; // fwd-left
-    case 'I': throttle =  127; turn =  127; break; // fwd-right
-    case 'H': throttle = -127; turn = -127; break; // back-left
-    case 'J': throttle = -127; turn =  127; break; // back-right
-    case 'S': /* stop: both 0 */          break;
+    case 'F': throttle =  127;             break;  // forward
+    case 'G': throttle = -127;             break;  // back
+    case 'L': turn     = -127;             break;  // spin left
+    case 'R': turn     =  127;             break;  // spin right
+    case 'Q': throttle =  127; turn =  -64; break; // fwd-left
+    case 'E': throttle =  127; turn =   64; break; // fwd-right
+    case 'Z': throttle = -127; turn =  -64; break; // back-left
+    case 'C': throttle = -127; turn =   64; break; // back-right
+    case 'S': /* stop: both 0 */           break;  // stop
     case 'q': speedCap = 255;             return false;   // full speed
     default:
       if (c >= '0' && c <= '9') { speedCap = SPEED_TBL[c - '0']; return false; }
