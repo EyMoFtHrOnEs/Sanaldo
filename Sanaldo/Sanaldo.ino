@@ -130,5 +130,14 @@ void loop() {
   static uint32_t t = 0;                                    // ~25 fps color transition
   if (millis() - t >= 40) { t = millis(); colorCycle(); }
 
+  static uint32_t dbg = 0;                                  // once/sec input dump (no car needed)
+  if (millis() - dbg >= 1000) {
+    dbg = millis();
+    Serial.printf("[IN] thr=%4d turn=%4d L=%4d R=%4d | R2=%3d L2=%3d lx=%4d rx=%4d "
+                  "dpad[U%d D%d L%d R%d] gear=%d\n",
+                  throttle, turn, left, right, ps5.r2, ps5.l2, ps5.lx, ps5.rx,
+                  ps5.up, ps5.down, ps5.left, ps5.right, gear + 1);
+  }
+
   delay(20);
 }
