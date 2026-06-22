@@ -27,7 +27,7 @@ int speedCar = 200;                 // 0..255, set by the app's '0'..'9' slider
 const int speed_Coeff = 3;          // diagonal: inner wheel runs at speed/speed_Coeff
 unsigned long lastCmd = 0;          // deadman timer (HC-06 has no link status)
 const unsigned long TIMEOUT = 600;  // no command for this long -> stop
-#define BT_NAME "Sanaldo BT"        // HC-06 name; type 'N' in Serial Monitor to apply (BEFORE pairing)
+#define BT_NAME "Sanaldo BT"        // HC-06 name, set automatically at boot (see setup)
 
 // one wheel, signed -255..255: direction pins + PWM magnitude
 void wheel(int pwm, int a, int b, int s) {

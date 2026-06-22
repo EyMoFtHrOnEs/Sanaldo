@@ -1,6 +1,4 @@
 // SanaldoWifi.ino — 2WD car controlled from a phone over Wi-Fi (WebSocket).
-// This one JOINS an existing Wi-Fi network (no hotspot). For the standalone
-// hotspot version see ../SanaldoHotspot.
 //
 // Board:   Deneyap Mini v2 (ESP32-S2) — Arduino core 2.0.x.
 //          The S2 has NO Bluetooth, but it DOES have Wi-Fi, so this is the way
@@ -8,14 +6,18 @@
 //          Tools -> USB CDC On Boot: Enabled  (so Serial = USB, for the log).
 // Driver:  L298N
 // Libs:    ESPAsyncWebServer + AsyncTCP   (Library Manager: "ESPAsyncWebServer"
-//          by ESP32Async, pulls in AsyncTCP). WiFi is built in.
+//          by ESP32Async, pulls in AsyncTCP). DNSServer/WiFi are built in.
+//
+// WHY WEBSOCKET: a browser can't open raw UDP/TCP — only WebSocket (TCP) or
+// WebRTC. Over a 1-hop SoftAP, WebSocket latency is a few ms, plenty for a car,
+// and far simpler than WebRTC. So: WebSocket it is.
 //
 // HOW IT WORKS:
-//   1. ESP32-S2 joins your Wi-Fi network (set WIFI_SSID / WIFI_PASS below).
-//   2. The Serial Monitor prints the IP it got (e.g. 192.168.1.42).
-//   3. Open http://<that-ip>/ on a phone/PC ON THE SAME NETWORK -> joystick UI.
-//   4. Two on-screen joysticks: LEFT = forward/back, RIGHT = left/right.
-//   5. Every message from the web is logged to USB Serial for debugging.
+//   1. ESP32-S2 starts a Wi-Fi hotspot "SanaldoCar" (no password).
+//   2. A captive DNS + redirect makes the phone pop a "Sign in to network"
+//      notification on connect. Tapping it opens the joystick web UI.
+//   3. Two on-screen joysticks: LEFT = forward/back, RIGHT = left/right.
+//   4. Every message from the web is logged to USB Serial for debugging.
 //
 // WIRING — Deneyap Mini v2 silk (D-label) -> L298N. SEPARATE motor battery,
 // shared GND, never the S2's pins. These are safe broken-out header pins
@@ -25,13 +27,15 @@
 //   D5 (GPIO39) -> ENB   D6 (GPIO38) -> IN3   D7 (GPIO37) -> IN4   (RIGHT)
 
 #include <WiFi.h>
+#include <DNSServer.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 
-const char* WIFI_SSID = "YOUR_WIFI";       // <-- your network name
-const char* WIFI_PASS = "YOUR_PASSWORD";   // <-- your network password
+const char* AP_SSID = "SanaldoHotspot";
+const char* AP_PASS = "sanaldo123";   // min 8 chars; "" for an open network
 const int   FAILSAFE_MS = 500;   // no message for this long -> stop (link dropped)
 
+DNSServer dns;
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 uint32_t lastMsg = 0;
@@ -68,7 +72,7 @@ void move(int throttle, int turn) {
   setWheels(left, right);
 }
 
-// ---- web UI (inline; served straight off the board) -------------------------
+// ---- web UI (inline; the AP has no internet so nothing can be a CDN link) ----
 
 const char PAGE[] PROGMEM = R"HTML(<!doctype html><html><head>
 <meta name=viewport content="width=device-width,initial-scale=1,user-scalable=no">
@@ -140,24 +144,25 @@ void setup() {
   stop();
   for (int i = 0; i < 3; i++) { rgb(10, 10, 10); delay(120); rgb(0, 0, 0); delay(120); }  // boot proof
 
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(WIFI_AP);
   WiFi.setTxPower(WIFI_POWER_8_5dBm);             // lower radio current -> avoid brownout reset loop
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.printf("[BOOT] joining \"%s\"", WIFI_SSID);
-  while (WiFi.status() != WL_CONNECTED) {         // blink amber until joined
-    rgb(12, 6, 0); delay(150); rgb(0, 0, 0); delay(150);
-    Serial.print('.');
-  }
-  Serial.printf("\n[BOOT] connected. Drive from http://%s/ (same network).\n",
-                WiFi.localIP().toString().c_str());
+  WiFi.softAP(AP_SSID, AP_PASS);
+  IPAddress ip = WiFi.softAPIP();                 // 192.168.4.1 by default
+  Serial.printf("[BOOT] hotspot \"%s\" up at http://%s\n", AP_SSID, ip.toString().c_str());
+
+  dns.start(53, "*", ip);                         // captive DNS: every host -> us
 
   ws.onEvent(onWs);
   server.addHandler(&ws);
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* r){ r->send_P(200, "text/html", PAGE); });
+  // anything else (OS captive-portal probes) -> redirect, which pops the
+  // "Sign in to network" notification; tapping it lands on the joystick page.
+  server.onNotFound([ip](AsyncWebServerRequest* r){ r->redirect("http://" + ip.toString() + "/"); });
   server.begin();
 }
 
 void loop() {
+  dns.processNextRequest();
   ws.cleanupClients();
   if (millis() - lastMsg > FAILSAFE_MS) stop();   // link quiet -> don't run away
   bool linked = ws.count() > 0;                   // a phone/browser is connected
