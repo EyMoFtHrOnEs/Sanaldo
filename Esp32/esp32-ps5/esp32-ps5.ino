@@ -123,7 +123,11 @@ Mode readInputs(int& throttle, int& turn) {      // KISS: analog wins, else d-pa
 
   int t = (ps5.up ? 1 : 0) - (ps5.down ? 1 : 0);
   int s = (ps5.right ? 1 : 0) - (ps5.left ? 1 : 0);
-  if (t != 0 || s != 0) { throttle = 127 * t; turn = 127 * s; return ModeDpad; }  // diagonals = t&s
+  if (t != 0 || s != 0) {
+    throttle = 127 * t;
+    turn     = (t != 0 ? 64 : 127) * s;          // gentle arc (128x64) while moving; full pivot when only steering
+    return ModeDpad;
+  }
 
   throttle = 0; turn = 0; return ModeIdle;
 }
@@ -228,7 +232,7 @@ void loop() {
                   "dpad[U%d D%d L%d R%d] ps5-batt=%d%%\n",
                   MODE_NAME[mode], throttle, turn, left, right, gear + 1,
                   ps5.r2, ps5.l2, ps5.lx, ps5.rx,
-                  ps5.up, ps5.down, ps5.left, ps5.right, ps5.battery);
+                  (bool)ps5.up, (bool)ps5.down, (bool)ps5.left, (bool)ps5.right, ps5.battery);
   }
 
   delay(connected ? 20 : 100);
