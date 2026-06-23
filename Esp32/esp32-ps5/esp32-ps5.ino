@@ -50,9 +50,11 @@ int gearMax() {                                  // DRY: one source for the spee
 
 void shiftGears(bool up, bool down) {            // KISS: Triangle up / Cross down
   if (up == down) return;
+  int prev = gear;
   if (up   && gear < 2) gear++;
   if (down && gear > 0) gear--;
-  rumbleUntil = millis() + 150;                  // brief buzz on shift
+  if (gear == prev) return;                      // already at a limit -> no change, no buzz
+  rumbleUntil = millis() + 150;                  // brief buzz only on a real shift
   Serial.printf("[GEAR] %d (max %d)\n", gear + 1, gearMax());
 }
 
@@ -149,20 +151,28 @@ void colorCycle() {                              // KISS: one rainbow step, keep
   ps5.lightbar(r * BRIGHT / 10, g * BRIGHT / 10, b * BRIGHT / 10).send();
 }
 
+void gearColor() {                               // KISS: solid color by gear (d-pad mode)
+  static const uint8_t RGB[3][3] = {
+    { 0, 255,   0 },   // gear 1 = green
+    { 0,   0, 255 },   // gear 2 = blue
+    { 255, 0,   0 },   // gear 3 = red
+  };
+  ps5.lightbar(RGB[gear][0], RGB[gear][1], RGB[gear][2]).send();
+}
+
 // ---- adaptive triggers ------------------------------------------------------
 
 void setTriggers() {                             // KISS: stage R2/L2 feel + shift buzz (sent by next .send())
-  int gas  = map(ps5.r2, 0, 255, 1, 10);         // gas stiffness 1% idle -> 10% floored
+  int rs   = map(ps5.r2, 0, 255, 10, 20);        // R2 stiffness 10% rest -> 20% full (linear, 15% mid)
+  int ls   = map(ps5.l2, 0, 255, 10, 20);        // L2 same linear curve
   int buzz = millis() < rumbleUntil ? 180 : 0;   // brief gear-shift rumble
-  ps5.r2Rigid(0, gas).l2Rigid(0, 50).rumble(0, buzz);   // brake = constant 50%
+  ps5.r2Rigid(0, rs).l2Rigid(0, ls).rumble(0, buzz);
 }
 
 // ---- OLED -------------------------------------------------------------------
 
-void drawOled(Mode mode, int left, int right, bool connected) {  // KISS: full repaint
-  float cv, ev; int cp, ep;
-  readCarBattery(cv, cp);
-  readEspBattery(ev, ep);
+void drawOled(Mode mode, int left, int right, bool connected,    // KISS: full repaint
+              float cv, int cp, float ev, int ep) {
   oled.clearDisplay();
   oled.setCursor(0, 0);
   oled.printf("PS5:%3d%%   BT:%s\n", ps5.battery, connected ? "OK" : "--");
@@ -217,8 +227,9 @@ void loop() {
     if (millis() - t >= 40) {
       t = millis();
       setTriggers();                             // stage R2 gas / L2 brake resistance
-      if (mode == ModeAnalog) colorCycle();     // .send() flushes lightbar + triggers
-      else                ps5.lightbar(0, 0, 0).send();
+      if      (mode == ModeAnalog) colorCycle();          // rainbow on analog
+      else if (mode == ModeDpad)   gearColor();           // solid gear color on d-pad
+      else                         ps5.lightbar(0, 0, 0).send();   // off when idle
     }
   } else {
     stop();
@@ -227,13 +238,18 @@ void loop() {
   static uint32_t disp = 0;                       // OLED + telemetry, 5x/sec
   if (millis() - disp >= 200) {
     disp = millis();
-    drawOled(mode, left, right, connected);
+    float cv, ev; int cp, ep;
+    readCarBattery(cv, cp);
+    readEspBattery(ev, ep);
+    drawOled(mode, left, right, connected, cv, cp, ev, ep);
     Serial.printf("[%-6s] thr=%4d turn=%4d L=%4d R=%4d gear=%d | R2=%3d L2=%3d lx=%4d rx=%4d "
-                  "dpad[U%d D%d L%d R%d] ps5-batt=%d%%\n",
+                  "dpad[U%d D%d L%d R%d] | ps5-batt=%d%% bt=%s "
+                  "car=%.2fV %d%% esp=%.2fV %d%%\n",
                   MODE_NAME[mode], throttle, turn, left, right, gear + 1,
                   ps5.r2, ps5.l2, ps5.lx, ps5.rx,
-                  (bool)ps5.up, (bool)ps5.down, (bool)ps5.left, (bool)ps5.right, ps5.battery);
+                  (bool)ps5.up, (bool)ps5.down, (bool)ps5.left, (bool)ps5.right,
+                  ps5.battery, connected ? "OK" : "--", cv, cp, ev, ep);
   }
 
-  delay(connected ? 20 : 100);
+  delay(connected ? 4 : 100);                    // ~250 Hz loop = matches the pad's BT packet rate
 }
