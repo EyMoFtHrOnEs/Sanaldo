@@ -7,14 +7,16 @@ Telefon uygulamasıyla kontrol edilen 2 motorlu (2WD) araba için Arduino kodlar
   `F` ileri · `B` geri · `L` sol · `R` sağ · `S` dur ·
   `I/G/J/H` çaprazlar · `0`–`9` hız ayarı
 
-Bu klasörde aynı arabanın **iki donanım sürümü** var:
+Bu klasörde aynı arabanın **üç donanım sürümü** var:
 
 | Klasör | Kart | Bağlantı | Modül gerekir mi? |
 |--------|------|----------|-------------------|
 | `arduinonanohc06` | Arduino Nano | **Bluetooth** (HC-06) | Evet, HC-06 |
 | `deneyapminiv2`   | [Deneyap Mini v2](https://magaza.deneyapkart.org/tr/product/detail/deneyap-mini-v2-type-c) (ESP32-S2) | **Wi-Fi** | Hayır (dahili Wi-Fi) |
+| `deneyapkart1a`   | Deneyap Kart 1A (ESP32-WROVER-E) | **Bluetooth** (dahili) | Hayır (dahili Bluetooth) |
 
-> ESP32-S2'de Bluetooth **yoktur**, o yüzden Deneyap kart Wi-Fi ile çalışır.
+> ESP32-S2'de Bluetooth **yoktur**, o yüzden Deneyap Mini Wi-Fi ile çalışır.
+> ESP32-WROVER'da Bluetooth **vardır**, o yüzden Deneyap Kart 1A modülsüz Bluetooth ile çalışır.
 > Nano'da Wi-Fi yoktur, o yüzden Nano harici HC-06 Bluetooth modülüyle çalışır.
 
 Her iki kodda da motorlar bir **L298N** sürücü üzerinden bağlıdır.
@@ -92,3 +94,32 @@ ESP32-S2 kendi Wi-Fi ağını (hotspot) açar, ekstra modül gerekmez.
 4. Butonlarla sür.
 
 > Ağın adını/şifresini değiştirmek için kodun başındaki `AP_SSID` / `AP_PASS` satırlarını düzenle.
+
+---
+
+## 3) Deneyap Kart 1A + Bluetooth (`deneyapkart1a`)
+
+ESP32-WROVER'da dahili Bluetooth Classic var; HC-06 gibi ekstra modül gerekmez.
+
+**Kablolama — Deneyap Kart 1A → L298N** (kartın silk etiketleri):
+
+| Deneyap | L298N | Motor |
+|---------|-------|-------|
+| D0  | ENA | Sol |
+| D1  | IN1 | Sol |
+| D4  | IN2 | Sol |
+| D5  | ENB | Sağ |
+| D6  | IN3 | Sağ |
+| D12 | IN4 | Sağ |
+
+> Motor için **ayrı pil** kullan, GND ortak olsun.
+
+**Arduino IDE ayarı:** `Tools → Partition Scheme → Huge APP (3MB No OTA)` (Bluetooth için **şart**).
+
+**Kullanım:**
+1. Kodu yükle.
+2. Telefonun Bluetooth ayarlarından **Sanaldo BT**'yi eşleştir.
+3. Uygulamayı aç → **Bluetooth** modunu seç → modüle bağlan.
+4. Butonlarla sür.
+
+> Bluetooth adını değiştirmek için koddaki `SerialBT.begin("SanaldoBT")` satırını düzenle.
