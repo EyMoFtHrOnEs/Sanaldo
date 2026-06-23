@@ -44,7 +44,7 @@ const char* MODE_NAME[] = { "IDLE", "ANALOG", "DPAD" };
 // ---- gears ------------------------------------------------------------------
 
 int gearMax() {                                  // DRY: one source for the speed cap
-  static const int GEARS[3] = { 100, 150, 255 };
+  static const int GEARS[3] = { 100, 180, 255 };
   return GEARS[gear];
 }
 
@@ -143,21 +143,20 @@ void wheel(uint8_t pos, uint8_t& r, uint8_t& g, uint8_t& b) {  // DRY: hue -> RG
   else                { pos -= 170; r = pos * 3;      g = 255 - pos * 3; b = 0; }
 }
 
-void colorCycle() {                              // KISS: one rainbow step, keeps BT alive
-  const int BRIGHT = 10;                         // 0..10
+void colorCycle(int bright) {                    // KISS: one rainbow step at bright 0..10
   static uint8_t hue = 0;
   uint8_t r, g, b;
   wheel(hue++, r, g, b);
-  ps5.lightbar(r * BRIGHT / 10, g * BRIGHT / 10, b * BRIGHT / 10).send();
+  ps5.lightbar(r * bright / 10, g * bright / 10, b * bright / 10).send();
 }
 
-void gearColor() {                               // KISS: solid color by gear (d-pad mode)
+void gearColor(int bright) {                     // KISS: solid color by gear at bright 0..10
   static const uint8_t RGB[3][3] = {
     { 0, 255,   0 },   // gear 1 = green
     { 0,   0, 255 },   // gear 2 = blue
     { 255, 0,   0 },   // gear 3 = red
   };
-  ps5.lightbar(RGB[gear][0], RGB[gear][1], RGB[gear][2]).send();
+  ps5.lightbar(RGB[gear][0] * bright / 10, RGB[gear][1] * bright / 10, RGB[gear][2] * bright / 10).send();
 }
 
 // ---- adaptive triggers ------------------------------------------------------
@@ -227,9 +226,11 @@ void loop() {
     if (millis() - t >= 40) {
       t = millis();
       setTriggers();                             // stage R2 gas / L2 brake resistance
-      if      (mode == ModeAnalog) colorCycle();          // rainbow on analog
-      else if (mode == ModeDpad)   gearColor();           // solid gear color on d-pad
-      else                         ps5.lightbar(0, 0, 0).send();   // off when idle
+      static Mode lastActive = ModeAnalog;       // idle keeps the last mode's color, dimmed
+      if (mode != ModeIdle) lastActive = mode;
+      int bright = (mode == ModeIdle) ? 1 : 10;  // full when driving, brightness 1 when idle
+      if (lastActive == ModeAnalog) colorCycle(bright);   // rainbow
+      else                          gearColor(bright);    // solid gear color
     }
   } else {
     stop();
@@ -242,11 +243,12 @@ void loop() {
     readCarBattery(cv, cp);
     readEspBattery(ev, ep);
     drawOled(mode, left, right, connected, cv, cp, ev, ep);
-    Serial.printf("[%-6s] thr=%4d turn=%4d L=%4d R=%4d gear=%d | R2=%3d L2=%3d lx=%4d rx=%4d "
+    Serial.printf("[%-6s] thr=%4d turn=%4d L=%4d%% R=%4d%% gear=%d | R2=%3d L2=%3d lx=%4d "
                   "dpad[U%d D%d L%d R%d] | ps5-batt=%d%% bt=%s "
                   "car=%.2fV %d%% esp=%.2fV %d%%\n",
-                  MODE_NAME[mode], throttle, turn, left, right, gear + 1,
-                  ps5.r2, ps5.l2, ps5.lx, ps5.rx,
+                  MODE_NAME[mode], throttle, turn,
+                  wheelPct(motors[0], left), wheelPct(motors[1], right), gear + 1,
+                  ps5.r2, ps5.l2, ps5.lx,
                   (bool)ps5.up, (bool)ps5.down, (bool)ps5.left, (bool)ps5.right,
                   ps5.battery, connected ? "OK" : "--", cv, cp, ev, ep);
   }
