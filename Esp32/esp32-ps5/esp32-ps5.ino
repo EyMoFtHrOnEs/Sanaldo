@@ -37,6 +37,7 @@ const uint8_t ESP_BAT = 35;   // 1S 18650, 3.2-4.2V, R1=100 R2=100 -> pin 1.60-2
 Adafruit_SSD1306 oled(128, 64, &Wire, -1);
 const char* PS5_MAC = "";                        // "" = scan+pair, or "AA:BB:CC:DD:EE:FF"
 int gear = 0;                                    // 0..2
+uint32_t rumbleUntil = 0;                        // millis() deadline for the gear-shift buzz
 enum Mode { IDLE, ANALOG, DPAD };
 const char* MODE_NAME[] = { "IDLE", "ANALOG", "DPAD" };
 
@@ -51,6 +52,7 @@ void shiftGears(bool up, bool down) {            // KISS: Triangle up / Cross do
   if (up == down) return;
   if (up   && gear < 2) gear++;
   if (down && gear > 0) gear--;
+  rumbleUntil = millis() + 150;                  // brief buzz on shift
   Serial.printf("[GEAR] %d (max %d)\n", gear + 1, gearMax());
 }
 
@@ -143,6 +145,14 @@ void colorCycle() {                              // KISS: one rainbow step, keep
   ps5.lightbar(r * BRIGHT / 10, g * BRIGHT / 10, b * BRIGHT / 10).send();
 }
 
+// ---- adaptive triggers ------------------------------------------------------
+
+void setTriggers() {                             // KISS: stage R2/L2 feel + shift buzz (sent by next .send())
+  int gas  = map(ps5.r2, 0, 255, 1, 10);         // gas stiffness 1% idle -> 10% floored
+  int buzz = millis() < rumbleUntil ? 180 : 0;   // brief gear-shift rumble
+  ps5.r2Rigid(0, gas).l2Rigid(0, 50).rumble(0, buzz);   // brake = constant 50%
+}
+
 // ---- OLED -------------------------------------------------------------------
 
 void drawOled(Mode mode, int left, int right, bool connected) {  // KISS: full repaint
@@ -199,10 +209,11 @@ void loop() {
     mix(throttle, turn, left, right);
     setWheels(left, right);
 
-    static uint32_t t = 0;                       // ~25 fps lightbar
+    static uint32_t t = 0;                       // ~25 fps lightbar + trigger feel
     if (millis() - t >= 40) {
       t = millis();
-      if (mode == ANALOG) colorCycle();
+      setTriggers();                             // stage R2 gas / L2 brake resistance
+      if (mode == ANALOG) colorCycle();          // .send() flushes lightbar + triggers
       else                ps5.lightbar(0, 0, 0).send();
     }
   } else {
