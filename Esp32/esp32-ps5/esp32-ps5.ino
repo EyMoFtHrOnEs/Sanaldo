@@ -38,7 +38,7 @@ Adafruit_SSD1306 oled(128, 64, &Wire, -1);
 const char* PS5_MAC = "";                        // "" = scan+pair, or "AA:BB:CC:DD:EE:FF"
 int gear = 0;                                    // 0..2
 uint32_t rumbleUntil = 0;                        // millis() deadline for the gear-shift buzz
-enum Mode { IDLE, ANALOG, DPAD };
+enum Mode { MODE_IDLE, MODE_ANALOG, MODE_DPAD };   // ANALOG/etc clash with esp32 core macros
 const char* MODE_NAME[] = { "IDLE", "ANALOG", "DPAD" };
 
 // ---- gears ------------------------------------------------------------------
@@ -119,13 +119,13 @@ int deadzone(int v) {                            // KISS: stick -> -127..127, 10
 Mode readInputs(int& throttle, int& turn) {      // KISS: analog wins, else d-pad
   int stick = deadzone(ps5.lx);
   int trig  = (ps5.r2 - ps5.l2) / 2;             // R2 fwd / L2 rev
-  if (stick != 0 || trig != 0) { throttle = trig; turn = stick; return ANALOG; }
+  if (stick != 0 || trig != 0) { throttle = trig; turn = stick; return MODE_ANALOG; }
 
   int t = (ps5.up ? 1 : 0) - (ps5.down ? 1 : 0);
   int s = (ps5.right ? 1 : 0) - (ps5.left ? 1 : 0);
-  if (t != 0 || s != 0) { throttle = 127 * t; turn = 127 * s; return DPAD; }  // diagonals = t&s
+  if (t != 0 || s != 0) { throttle = 127 * t; turn = 127 * s; return MODE_DPAD; }  // diagonals = t&s
 
-  throttle = 0; turn = 0; return IDLE;
+  throttle = 0; turn = 0; return MODE_IDLE;
 }
 
 // ---- lightbar ---------------------------------------------------------------
@@ -202,7 +202,7 @@ void loop() {
   }
 
   int throttle = 0, turn = 0, left = 0, right = 0;
-  Mode mode = IDLE;
+  Mode mode = MODE_IDLE;
   if (connected) {
     shiftGears(ps5.triangle.pressed, ps5.cross.pressed);
     mode = readInputs(throttle, turn);
