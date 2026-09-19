@@ -1,10 +1,12 @@
-// BLE RC car: ESP32 + L298N, two motors, differential drive under an Ackermann
-// curvature limit. Core 0 runs the radio, core 1 runs the wheels.
+// BLE RC car: ESP32 + L298N. Core 0 runs the radio, core 1 runs the wheels.
 //
-//   src/config.h  every tunable and the wiring map
-//   src/motor.h   packet meaning, motion model, kinematics, L298N output
-//   src/ble.h     Nordic UART server and the shared command block
-//   python/       keyboard controller, plus a simulator that links src/motor.h
+// The board does two things and no more: put the duty it was sent on the motors,
+// and stop when nobody is talking to it. How the car drives - ramps, turn limits,
+// cruise and turbo - is decided in python/car.py and arrives here already chewed.
+//
+//   src/config.h  wiring, PWM, failsafe timeout
+//   src/motor.h   L298N output stage
+//   src/ble.h     Nordic UART receive, "<left%> <right%>"
 //
 // Board: ESP32 Dev Module, arduino-esp32 3.3.10 (see sketch.yaml).
 #include <Arduino.h>
@@ -16,19 +18,15 @@
 #error "Needs arduino-esp32 3.x: ledcAttach/ledcWrite take a pin, not a channel."
 #endif
 
-// Core 1, and nothing else on it. Fixed 100 Hz, so the slew limits in motor::step
-// are real rates and not "however fast the loop got round this time".
+// Core 1, and nothing else on it. The refresh is steady so a packet that arrives
+// mid-tick waits at most 10 ms rather than landing on the pins half-applied.
 static void driveTask(void *) {
   const TickType_t period = pdMS_TO_TICKS(1000 / CONTROL_HZ);
-  const float dt = 1.0f / CONTROL_HZ;
   TickType_t wake = xTaskGetTickCount();
-  motor::State state;
-
   for (;;) {
-    float dutyLeft, dutyRight;
-    motor::tick(state, ble::command(), dt, dutyLeft, dutyRight);
-    motor::drive(dutyLeft, dutyRight);
-    ble::telemetry(state, dutyLeft, dutyRight);
+    float left, right;
+    ble::command(left, right);
+    motor::drive(left, right);
     vTaskDelayUntil(&wake, period);
   }
 }
@@ -37,7 +35,7 @@ void setup() {
   Serial.begin(115200);
   motor::begin();  // pins low and PWM attached before either task can touch them
   xTaskCreatePinnedToCore(ble::task, "ble",   8192, nullptr, 1, nullptr, 0);
-  xTaskCreatePinnedToCore(driveTask, "drive", 4096, nullptr, 3, nullptr, 1);
+  xTaskCreatePinnedToCore(driveTask, "drive", 2048, nullptr, 3, nullptr, 1);
 }
 
 void loop() {

@@ -1,5 +1,9 @@
 #pragma once
-// Every knob lives here. No Arduino headers: test/ compiles this with plain g++.
+// Wiring, and the three numbers the board needs to act on it.
+//
+// Nothing about how the car *drives* is here. Ramps, turn limits, driving modes,
+// what a key means - all of that lives in python/car.py, where changing it costs a
+// rerun instead of a reflash. This end is an output stage with a radio.
 
 // ---------------------------------------------------------------------------
 // L298N wiring - ESP32 DevKit (classic WROOM-32)
@@ -28,38 +32,9 @@ constexpr int PWM_FREQ_HZ = 10000;  // L298N likes 5-20 kHz; drop to 1000 if it 
 constexpr int PWM_BITS    = 10;
 constexpr int PWM_MAX     = (1 << PWM_BITS) - 1;
 
-// ---- chassis geometry ----
-constexpr float TRACK_M          = 0.15f;    // measured: wheel centre to wheel centre
-constexpr float WHEEL_DIAMETER_M = 0.055f;   // measured
-constexpr float MOTOR_RPM        = 500.0f;   // the motor's rated no-load speed
+constexpr int CONTROL_HZ = 100;  // how often the duty on the pins is refreshed
 
-// Top speed is geometry, not a guess: one revolution carries the car pi*d, and the
-// motor manages MOTOR_RPM of them a minute - minus whatever the real world takes.
-// A loaded motor never reaches its no-load rating and the L298N drops ~2 V getting
-// there, so LOAD_FACTOR is the one number here you have to measure: time the car
-// over 2 m at full throttle and set it to (measured m/s) / 1.44.
-constexpr float LOAD_FACTOR = 0.75f;  // CALIBRATE ME
-constexpr float V_MAX_MPS = WHEEL_DIAMETER_M * 3.14159265f * MOTOR_RPM / 60.0f * LOAD_FACTOR;
-
-// ---- CALIBRATE THESE TOO ----
-constexpr float MOTOR_MIN_DUTY = 0.25f;  // lowest duty where the wheels actually turn
-constexpr float TRIM_LEFT = 1.00f, TRIM_RIGHT = 1.00f;  // even out a chassis that veers
-
-// ---- how fast it may gain and lose speed ----
-constexpr float ACCEL_MPS2 = 1.20f;  // ~0.9 s from rest to V_MAX
-constexpr float DECEL_MPS2 = 2.40f;  // braking may be brisker than launching
-
-// ---- how it is allowed to turn ----
-// Two limits shape every corner: below ~0.73 m/s the radius floor binds, so slow
-// corners come out tight, and above it lateral grip binds, so fast ones open up.
-// Full stick always asks for whichever of the two currently applies, which is what
-// makes the steering feel the same at both ends of the speed range.
-constexpr float MIN_TURN_RADIUS_M = 0.18f;  // ~1.2x track. Tighter than this scrubs.
-constexpr float MAX_LATERAL_MPS2  = 3.00f;  // sideways grip before it slides or tips
-constexpr float YAW_ACCEL_RPS2    = 9.00f;  // ~0.3 s to full lock: quick, still not a step
-constexpr float PIVOT_YAW_RATE    = 3.00f;  // 170 deg/s on the spot
-constexpr float PIVOT_FADE_MPS    = 0.30f;  // pivot help fades out by this speed
-
-// ---- loop / link ----
-constexpr int CONTROL_HZ     = 100;
-constexpr int CMD_TIMEOUT_MS = 400;  // silence longer than this -> coast to a stop
+// The one piece of policy that cannot live in the controller: a controller which
+// has lost contact cannot stop a car. Silence this long, or a dropped connection,
+// and the motors go off.
+constexpr int CMD_TIMEOUT_MS = 400;
