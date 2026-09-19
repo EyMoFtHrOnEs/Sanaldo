@@ -1,0 +1,12 @@
+# min_spiffs, not the default scheme: BLE is a big binary and the stock 1.2 MB app
+# slot leaves no room to grow, while 1.9 MB with OTA still keeps two banks.
+# EventsCore/LoopCore on 0 so core 1 belongs to the 100 Hz control loop alone.
+profiles:
+  devkit:
+    notes: ESP32 DevKit, classic WROOM-32. BLE only, no WiFi.
+    fqbn: esp32:esp32:esp32:PartitionScheme=min_spiffs,CPUFreq=240,FlashSize=4M,UploadSpeed=921600,EventsCore=0,LoopCore=0
+    platforms:
+      - platform: esp32:esp32 (3.3.10)
+        platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+
+default_profile: devkit

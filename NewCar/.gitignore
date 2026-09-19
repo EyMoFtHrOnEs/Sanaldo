@@ -1,0 +1,5 @@
+python/motor.dll
+python/libmotor.so
+python/.venv/
+__pycache__/
+build/
